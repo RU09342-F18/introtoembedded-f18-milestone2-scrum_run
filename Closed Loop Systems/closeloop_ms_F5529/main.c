@@ -11,9 +11,8 @@
 // Variable Initializations
 unsigned int ADC;
 float resolution, logR, kelvin, temp;
-char space = ' ';
-volatile float target = 25;
-volatile float diff;
+volatile int target = 40;                               // Target Temperature
+volatile float diff;                                    // difference in actual temperature and desired temperature of thermistor
 
 
 void configurePWM() {
@@ -31,18 +30,21 @@ void configureUARTLED()
    // Onboard LED for indicator that the ADC is sampling and the value is being sent to RealTerm
    P4DIR |= BIT7;
    P4OUT &= ~BIT7;
+   P1DIR |= BIT0;
+   P1OUT &= ~BIT0;
 }
 
 void configureUART() {
-   P4SEL |= BIT5 | BIT4;                                // Enables RX and TX buffer
+   P4SEL |= BIT5;                                       // Enables RX and TX buffer
+   P4SEL |= BIT4;
    UCA1CTL1 |= UCSWRST;                                 // Software reset enable
    UCA1CTL1 |= UCSSEL_1;                                // USCI clock source select - ACLK
    UCA1BR0 = 3;                                         // Baud rate clock divider1 for 9600 BR
    UCA1BR1 = 0;                                         // Baud rate clock divider2 for 9600 BR
    UCA1MCTL |= UCBRS_3 | UCBRF_0;                       // First and second stage modulation for higher accuracy baud rate
+   UCA1CTL1 &= ~UCSWRST;
    UCA1IE |= UCTXIE;                                    // Enables Transfer buffer interrupt
    UCA1IE |= UCRXIE;                                    // Enables Receiver buffer interrupt
-   UCA1IFG &= ~UCRXIFG;                                 // Clears Receiver buffer interrupt flag
 }
 
 void configureADC() {
@@ -66,8 +68,10 @@ int main(void)
    configureUART();
    configureADC();
 
-   __bis_SR_register(GIE);                              // Enables Global Interrupt - ADC/UART interrupt support
-   while (1);
+         __bis_SR_register(GIE);              // Enables Global Interrupt - ADC/UART interrupt support
+         __no_operation();
+
+   //while (1);
 }
 
 // Helpful TI resource code - ADC vector interrupt protocol
@@ -75,7 +79,7 @@ int main(void)
 __interrupt void newADC(void)
 {
    switch (ADC12IV)
-{
+   {
    case 6:
    {
         // Temperature calculations
@@ -87,10 +91,8 @@ __interrupt void newADC(void)
         temp = (kelvin - 273.0);                        // Converts Kelvin to Celcius
         UCA1TXBUF = (int) temp;                         // Sends the temperature in Celcius to the UART buffer as an integer to be recorded on RealTerm
         P4OUT ^= BIT7;                                  // Toggles On-Board LED P4.7 as an indicator that the ADC sampled at that time
-        ADC12CTL0 |= ADC12SC;                           // Triggers Analog to Digital Conversion
-
         diff = temp - target;                           // Calculates the difference in current temperature and target temperature of the thermistor
-        volatile float P = diff * 75;                   // Proportion control constant
+        volatile float P = diff * 70;                   // Proportion control constant
         // Proportion control functions
               if (P == 0)
               {
@@ -99,26 +101,29 @@ __interrupt void newADC(void)
 
               else if (P >= 255)
               {
-                 TA0CCR1 = 255;
+                  TA0CCR1 = 255;
               }
 
               else if (P < 0)
               {
-                TA0CCR1 = 0;
+                  TA0CCR1 = 0;
               }
               else
               {
-              TA0CCR1 = P;
+                  TA0CCR1 = P;
               }
                 break;
    }
    default:// Do nothing
- }
-}
-// UART interrupt vector protocol
-#pragma vector=USCI_A1_VECTOR
-__interrupt void USCI_A1_ISR(void)
-{
-  target = UCA1RXBUF;                                   // Receives value from UART and sets it to the new target temperature
+   }
 }
 
+// UART interrupt vector protocol
+#pragma vector = USCI_A1_VECTOR
+__interrupt void USCI_A1_ISR(void)
+{
+  target = UCA1RXBUF;                   // Receives value from UART and sets it to the new target temperature
+  __delay_cycles(1000);
+  ADC12CTL0 |= ADC12SC;                 // Starts ADC conversion sampling
+  P1OUT ^= BIT0;                        // Toggles onboard LED for indication
+}
